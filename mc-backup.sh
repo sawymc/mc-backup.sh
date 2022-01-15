@@ -1,22 +1,21 @@
 #!/bin/bash
 : '
-MC-BACKUP
+MC-BACKUP script based on:
 https://github.com/J-Bentley/mc-backup.sh'
 
-serverDir="/home/jbentley/mc"
-backupDir="/home/jbentley/backup"
-serverName="awesomeserver"
+serverDir="/home/user/minecraft-server"
+serverName="mcserver"
 startScript="bash start.sh"
 gracePeriod="1m"
-serverWorlds=("world" "world_nether" "world_the_end")
+githubRepo="git@github.com:account/repository.git"
 # Don't change anything past this line unless you know what you're doing.
 
 currentDay=$(date +"%Y-%m-%d-%H:%M")
 screens=$(ls /var/run/screen/S-$USER -1 | wc -l || 0)
 serverRunning=true
-worldsOnly=false
-pluginOnly=false
 restartOnly=false
+githubSetup=false
+githubDone=false
 pluginconfigOnly=false
 
 log () {
@@ -34,46 +33,21 @@ stopHandling () {
     screen -p 0 -X stuff "stop$(printf \\r)"
     sleep 5
 }
-worldfoldercheck () {
-    # Checks to make sure all the worlds defined in serverWorlds array exist as directories
-    for item in "${serverWorlds[@]}"
-    do
-        if [! -d $backupDir/$item ]; then
-            log "[$currentDay] Error: World folder not found! Backup has been cancelled. ($backupDir/$item)\n"
-            exit 1
-	fi
-    done
-}
-deleteBackup () {
-    # Deletes contents of backupDir at start of every execution unless restartOnly mode
-    if [ "$(ls -A $backupDir)" ]; then
-	log "[$currentDay] Warning: Backup directory not empty! Deleting contents before proceeding...\n"
-        rm -R $backupDir/*
-        exit 1
-    fi
-}
 
 # USER INPUT
 while [ $# -gt 0 ];
 do
     case "$1" in
       -h|--help)
-        echo -e "MC-BACKUP by Jordan B\n---------------------------\nA compression script of\n[$serverDir] to [$backupDir] for $serverName!\n"
-        echo -e "Usage:\nNo args | Compress $serverName root dir.\n-h | Help (this).\n-w | Compress worlds only.\n-r | Restart with warnings, no backups made.\n-p | Compress plugins only.\n-pc | Compress plugin config files only."
+        echo -e "MC-BACKUP by Jordan B (adapted by Sawy7 for Github)\n---------------------------\nA backup script of\n[$serverDir] to Github for $serverName!\n"
+        echo -e "Usage:\nNo args | Backup $serverName root dir.\n-h | Help (this).\n-r | Restart with warnings, no backups made.\n-s | Setup backup repository (on first run)."
         exit 0
         ;;
-      -w|--worlds)
-        worldfoldercheck
-        worldsOnly=true
-        ;;
-      -p|--plugin)
-        pluginOnly=true
+      -s|--setupgithub)
+        githubSetup=true
         ;;
       -r|--restart)
         restartOnly=true
-        ;;
-      -pc|--pluginconfig)
-        pluginconfigOnly=true
         ;;
       *)
       log -e "[$currentDay] Error: Invalid argument: ${1}\n" 
@@ -92,11 +66,6 @@ if [ ! -d $serverDir ]; then
     log "[$currentDay] Error: Server folder not found! Backup has been cancelled. ($serverDir)\n"
     exit 1
 fi
-# Logs error and cancels script if backupDir isn't found
-if [ ! -d $backupDir ]; then
-    log "[$currentDay] Error: Backup folder not found! Backup has been cancelled. ($backupDir)\n"
-    exit 1
-fi
 # Logs error if JAVA process isn't detected but will continue anyways!!
 if ! ps -e | grep -q "java"; then
     log "[$currentDay] Warning: $serverName is not running! Continuing without in-game warnings...\n"
@@ -110,10 +79,19 @@ elif [ $screens -gt 1 ]; then
     log "\n[$currentDay] Error: More than 1 screen session is running! Backup has been cancelled.\n"
     exit 1
 fi
-# Deletes contents of backupDir at start of every execution unless restartOnly mode
-if ! $restartOnly; then
-    deleteBackup
+
+if test -f "$serverDir/.gitsetupdone"; then
+    githubDone=true
 fi
+
+if ! $githubDone && ! $githubSetup; then
+    log "\n[$currentDay] Error: Github was not setup! Backup has been cancelled.\n"
+    exit 1
+elif $githubSetup && $githubDone; then
+    log "\n[$currentDay] Error: Github has already been setup. You can run without arguments now.\n"
+    exit 1
+fi
+
 # Wont execute stopHandling if server is offline upon script start
 if $serverRunning; then
     stopHandling
@@ -125,32 +103,28 @@ elapsedTimeStart="$(date -u +%s)"
 # LOGIC HANDLING
 if $restartOnly; then
     log "[$currentDay] Restart only started ...\n"
-elif $worldsOnly; then
-    log "[$currentDay] Worlds only started ...\n"
-    # Starts the tar with files from the void (/dev/null is a symlink to a non-existent dir) so that multiple files can be looped in from array then gziped together.
-    tar cf $backupDir/$serverName[WORLDS]-$currentDay.tar --files-from /dev/null 
-    for item in "${serverWorlds[@]}"
-    do
-        tar rf $backupDir/$serverName[WORLDS]-$currentDay.tar "$serverDir/$item"
-    done
-    gzip $backupDir/$serverName[WORLDS]-$currentDay.tar
-elif $pluginOnly; then
-    log "[$currentDay] Plugins only started...\n"
-    tar -czPf $backupDir/$serverName[PLUGINS]-$currentDay.tar.gz $serverDir/plugins
-elif $pluginconfigOnly; then
-    log "[$currentDay] Plugin Configs only started...\n"
-    tar -czPf $backupDir/$serverName[PLUGIN-CONFIG]-$currentDay.tar.gz --exclude='*.jar' $serverDir/plugins
+elif $githubSetup; then
+    log "[$currentDay] Setting up Github repo ...\n"
+    cd $serverDir
+    git init
+    git add -A
+    git commit -m "backup setup"
+    git branch -M master
+    git remote add origin $githubRepo
+    git push -u origin master
+    log "[$currentDay] Github repo setup is done.\n"
+    touch .gitsetupdone
 else
-    log "[$currentDay] Full compression started...\n"
-    tar -czPf $backupDir/$serverName-$currentDay.tar.gz $serverDir
+    log "[$currentDay] Github backup started ...\n"
+    cd $serverDir
+    git add -A
+    git commit -m "$serverName - $currentDay"
+    git push -u origin master
 fi
 
 # Grabs date in seconds AFTER compression completes then does math to find time it took to compress
 elapsedTimeEnd="$(date -u +%s)"
 elapsed="$(($elapsedTimeEnd-$elapsedTimeStart))"
-
-# Grabs size of item in backuplocation, assumes compressed item is only file in dir via deletebackup function
-compressedSize=$(du -sh $backupLocation* | cut -c 1-3)
 
 # Will restart server if it was online upon script start OR if in restartOnly mode regardless of server state at script launch -- therefore WONT ever restart server if offline upon script launch unless restartOnly
 if $serverRunning || $restartOnly; then
@@ -160,15 +134,7 @@ fi
 
 if $restartOnly; then
     log "[$currentDay] $serverName restarted in $((elapsed/60)) min(s)!\n"
-elif $worldsOnly; then
-    log "[$currentDay] $serverWorlds compressed to $compressedSize and copied to $backupDir in $((elapsed/60)) min(s)!\n"
-elif $pluginOnly; then
-    log "[$currentDay] $serverDir/plugins* compressed from $uncompressedSize to $compressedSize and copied to $backupDir in $((elapsed/60)) min(s)!\n"
-elif $pluginconfigOnly; then
-    log "[$currentDay] Plugin configs compressed from $uncompressedSize to $compressedSize and copied to $backupDir in $((elapsed/60)) min(s)!\n"
 else
-    # Grabs size of Server file in kb for comparison on output
-    uncompressedSize=$(du -sh $fileToBackup* | cut -c 1-3) 
-    log "[$currentDay] $fileToBackup compressed from $uncompressedSize to $compressedSize and copied to $backupDir in $((elapsed/60)) min(s)!\n"
+    log "[$currentDay] github backup was completed in $((elapsed/60)) min(s)!\n"
 fi
 exit 0
