@@ -80,7 +80,7 @@ elif [ $screens -gt 1 ]; then
     exit 1
 fi
 
-if test -f "$serverDir/.gitsetupdone"; then
+if test -f "$serverDir/.git"; then
     githubDone=true
 fi
 
